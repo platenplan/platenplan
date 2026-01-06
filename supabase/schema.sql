@@ -1,161 +1,214 @@
--- Enable UUID extension
-create extension if not exists "uuid-ossp";
+-- 1. ENUMS (Roles, Payment Modes, Units)
+-- User roles
+CREATE TYPE user_role AS ENUM ('admin', 'member');
 
--- USERS & HOUSEHOLDS
--- Note: 'users' table extends the auth.users logic or works alongside it. 
--- In a simple setup, we might just use public.profiles linked to auth.users.
-create table public.profiles (
-  id uuid references auth.users on delete cascade not null primary key,
-  email text,
-  full_name text,
-  household_id uuid, -- Users in the same household share data
-  role text default 'member', -- 'admin', 'member'
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+-- Payment modes
+CREATE TYPE payment_mode AS ENUM ('cash', 'card', 'bank_transfer', 'wallet', 'upi', 'other');
+
+-- Units for inventory
+CREATE TYPE unit_type AS ENUM ('kg', 'g', 'litre', 'ml', 'piece', 'pack', 'box', 'other');
+
+-- 2. USERS TABLE
+-- Supabase already has auth.users. We create a profile table linked to it.
+CREATE TABLE profiles (
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  household_id UUID NOT NULL,
+  full_name TEXT,
+  role user_role NOT NULL DEFAULT 'member',
+  relation TEXT, -- you, wife, child1, child2
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
--- WALLETS
-create table public.wallets (
-  id uuid default uuid_generate_v4() primary key,
-  household_id uuid not null, -- Linked to household
-  name text not null, -- 'Dad', 'Mom', 'Shared', 'Savings'
-  type text default 'personal', -- 'personal', 'shared'
-  owner_id uuid references public.profiles(id), -- If personal, who owns it
-  balance numeric default 0,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE INDEX profiles_household_idx ON profiles(household_id);
+
+-- 3. HOUSEHOLDS TABLE
+-- Supports multi‑user family setup.
+CREATE TABLE households (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
--- CATEGORIES
-create table public.categories (
-  id uuid default uuid_generate_v4() primary key,
-  household_id uuid, -- Null means global default, otherwise custom
-  name text not null,
-  icon text,
-  type text default 'expense', -- 'expense', 'income'
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+-- 4. WALLETS TABLE
+CREATE TABLE wallets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  name TEXT NOT NULL, -- You, Wife, Shared
+  type TEXT NOT NULL, -- personal / shared
+  owner_user_id UUID REFERENCES profiles(id),
+  balance NUMERIC(12,2) DEFAULT 0,
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
--- SUBCATEGORIES
-create table public.subcategories (
-  id uuid default uuid_generate_v4() primary key,
-  category_id uuid references public.categories(id) on delete cascade not null,
-  name text not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE INDEX wallets_household_idx ON wallets(household_id);
+
+-- 5. CATEGORIES & SUBCATEGORIES
+CREATE TABLE categories (
+  id SERIAL PRIMARY KEY,
+  household_id UUID NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  name TEXT NOT NULL
 );
 
--- EXPENSES
-create table public.expenses (
-  id uuid default uuid_generate_v4() primary key,
-  household_id uuid not null,
-  amount numeric not null,
-  date date not null default current_date,
-  description text,
-  
-  category_id uuid references public.categories(id),
-  subcategory_id uuid references public.subcategories(id),
-  
-  paid_by_wallet_id uuid references public.wallets(id),
-  
-  payment_mode text, -- 'cash', 'card', 'transfer'
-  attachment_url text,
-  
-  created_by_user_id uuid references public.profiles(id),
-  
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  updated_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  
-  is_deleted boolean default false
+CREATE TABLE subcategories (
+  id SERIAL PRIMARY KEY,
+  category_id INT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+  name TEXT NOT NULL
 );
 
--- EXPENSE BENEFICIARIES (Split logic)
-create table public.expense_beneficiaries (
-  id uuid default uuid_generate_v4() primary key,
-  expense_id uuid references public.expenses(id) on delete cascade not null,
-  user_id uuid references public.profiles(id), -- Who benefited (null could mean 'family' generic if needed, but better to be explicit)
-  percentage numeric, -- Optional, for non-equal splits
-  amount numeric -- Calculated share
+CREATE INDEX subcat_cat_idx ON subcategories(category_id);
+
+-- 6. EXPENSES TABLE
+CREATE TABLE expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  amount NUMERIC(12,2) NOT NULL,
+  category_id INT REFERENCES categories(id),
+  subcategory_id INT REFERENCES subcategories(id),
+  paid_by_wallet_id UUID REFERENCES wallets(id),
+  payment_mode payment_mode DEFAULT 'cash',
+  shared_flag BOOLEAN DEFAULT FALSE,
+  notes TEXT,
+  attachment_url TEXT,
+  created_by UUID REFERENCES profiles(id),
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW(),
+  date DATE DEFAULT CURRENT_DATE
 );
 
--- INVENTORY
-create table public.inventory_items (
-  id uuid default uuid_generate_v4() primary key,
-  household_id uuid not null,
-  name text not null,
-  category_id uuid references public.categories(id), -- e.g. 'Groceries'
-  quantity numeric default 0,
-  unit text, -- 'kg', 'pcs', 'l'
-  cost_per_unit numeric,
-  expiry_date date,
-  status text default 'in_stock', -- 'in_stock', 'low', 'expired'
-  
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null,
-  updated_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE INDEX expenses_household_idx ON expenses(household_id);
+CREATE INDEX expenses_category_idx ON expenses(category_id);
+
+-- 7. EXPENSE BENEFICIARIES TABLE
+-- Supports per‑child cost, shared logic, fairness.
+CREATE TABLE expense_beneficiaries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  expense_id UUID NOT NULL REFERENCES expenses(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES profiles(id),
+  percentage NUMERIC(5,2) -- optional
 );
 
--- RECIPES
-create table public.recipes (
-  id uuid default uuid_generate_v4() primary key,
-  household_id uuid not null,
-  name text not null,
-  description text,
-  estimated_cost numeric,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+CREATE INDEX exp_benefit_exp_idx ON expense_beneficiaries(expense_id);
+
+-- 8. INVENTORY TABLE
+CREATE TABLE inventory (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  item_name TEXT NOT NULL,
+  quantity NUMERIC(12,2),
+  unit unit_type,
+  linked_expense_id UUID REFERENCES expenses(id),
+  expiry_date DATE,
+  category TEXT, -- food, household, etc.
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
-create table public.recipe_ingredients (
-  id uuid default uuid_generate_v4() primary key,
-  recipe_id uuid references public.recipes(id) on delete cascade not null,
-  inventory_item_id uuid references public.inventory_items(id), -- Specific item link
-  -- OR generic name if not in inventory yet? Let's stick to simple text if needed, or item link.
-  quantity_needed numeric,
-  unit text
+CREATE INDEX inventory_household_idx ON inventory(household_id);
+
+-- 9. RECIPES TABLE
+CREATE TABLE recipes (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  ingredients JSONB, -- [{item_id, qty, unit}]
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
--- RLS (Row Level Security)
-alter table public.profiles enable row level security;
-alter table public.wallets enable row level security;
-alter table public.categories enable row level security;
-alter table public.subcategories enable row level security;
-alter table public.expenses enable row level security;
-alter table public.inventory_items enable row level security;
-
--- Policies (Simplified for initial setup: Users allow read/write if they belong to household)
--- NOTE: User creation needs a trigger to key profile creation.
-
--- Profiles: Users can read their own profile.
-create policy "Users can view own profile" on public.profiles for select using (auth.uid() = id);
-create policy "Users can update own profile" on public.profiles for update using (auth.uid() = id);
-
--- Wallets: Users can see wallets in their household.
-create policy "Household view wallets" on public.wallets for select using (
-  exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.household_id = wallets.household_id)
-);
-create policy "Household update wallets" on public.wallets for all using (
-  exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.household_id = wallets.household_id)
+-- 10. BUDGETS TABLE
+CREATE TABLE budgets (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  category_id INT REFERENCES categories(id),
+  monthly_limit NUMERIC(12,2),
+  created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Expenses:
-create policy "Household view expenses" on public.expenses for select using (
-  exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.household_id = expenses.household_id)
+-- 11. RECURRING EXPENSES TABLE
+CREATE TABLE recurring_expenses (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  household_id UUID NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  amount NUMERIC(12,2),
+  category_id INT REFERENCES categories(id),
+  subcategory_id INT REFERENCES subcategories(id),
+  due_day INT, -- e.g., 1st of every month
+  created_at TIMESTAMP DEFAULT NOW()
 );
-create policy "Household manage expenses" on public.expenses for all using (
-  exists (select 1 from public.profiles where profiles.id = auth.uid() and profiles.household_id = expenses.household_id)
+
+-- 12. RLS (Row Level Security)
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE households ENABLE ROW LEVEL SECURITY;
+ALTER TABLE wallets ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE expense_beneficiaries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recipes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE budgets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE recurring_expenses ENABLE ROW LEVEL SECURITY;
+
+-- 12.1 RLS Policies
+-- Profiles
+CREATE POLICY "Users can view own profile" ON profiles FOR SELECT USING (id = auth.uid());
+CREATE POLICY "Users can update own profile" ON profiles FOR UPDATE USING (id = auth.uid());
+
+-- RLS Helper function to check household membership (Optional but clean)
+-- For now, using direct queries as requested.
+
+-- Households:
+-- Users can see households they belong to (via profile)
+CREATE POLICY "View household" ON households FOR SELECT USING (
+  exists (select 1 from profiles where profiles.id = auth.uid() and profiles.household_id = households.id)
 );
 
--- Function to handle new user signup
-create or replace function public.handle_new_user() 
-returns trigger as $$
-begin
-  insert into public.profiles (id, email, full_name, household_id)
-  values (new.id, new.email, new.raw_user_meta_data->>'full_name', uuid_generate_v4()); 
-  -- Note: assigns new household ID by default. Later logic can join existing household.
-  return new;
-end;
-$$ language plpgsql security definer;
+-- Expenses
+CREATE POLICY "Household access"
+ON expenses
+FOR SELECT USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
 
--- Trigger for auth.users
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute procedure public.handle_new_user();
+CREATE POLICY "Household insert"
+ON expenses
+FOR INSERT WITH CHECK (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
 
+-- Wallets
+CREATE POLICY "Household view wallets" ON wallets FOR SELECT USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
+CREATE POLICY "Household update wallets" ON wallets FOR ALL USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
+
+-- Inventory
+CREATE POLICY "Household view inventory" ON inventory FOR SELECT USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
+CREATE POLICY "Household manage inventory" ON inventory FOR ALL USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
+
+-- Recipes
+CREATE POLICY "Household view recipes" ON recipes FOR SELECT USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
+
+-- Budgets
+CREATE POLICY "Household view budgets" ON budgets FOR SELECT USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
+
+-- Recurring Expenses
+CREATE POLICY "Household view recurring" ON recurring_expenses FOR SELECT USING (
+  household_id = (SELECT household_id FROM profiles WHERE id = auth.uid())
+);
+
+-- 13. Sample Seed Data
+-- NOTE: Requires a valid household ID and user ID in real usage.
+-- Since this is SQL to be pasted, we cannot dynamic select easily without a DO block or manual ID insertion.
+-- The provided sample:
+-- INSERT INTO households (name) VALUES ('My Family');
+-- INSERT INTO categories (household_id, name) VALUES ...
+-- This works if run sequentially in a script where variables are allowed or referencing last ID.
+-- For Supabase SQL Editor, multiple CTEs or DO blocks are better, but simple inserts work if run line-by-line or if ID is known.
