@@ -43,3 +43,25 @@ export async function deleteBudget(id: string) {
     await supabase.from('budgets').delete().eq('id', id)
     revalidatePath('/budgets')
 }
+
+export async function updateBudget(prevState: any, formData: FormData) {
+  const supabase = await createClient()
+
+  const id = formData.get('id') as string
+  const amount = formData.get('amount') as string
+
+  const { error } = await supabase
+    .from('budgets')
+    .update({
+        monthly_limit: parseFloat(amount)
+    })
+    .eq('id', id)
+
+  if (error) {
+    console.error('Update Budget Error:', error)
+    return { message: 'Failed to update budget' }
+  }
+
+  revalidatePath('/budgets')
+  return { message: 'success' }
+}

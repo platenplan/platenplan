@@ -97,3 +97,28 @@ export async function deleteRecipe(id: string) {
     await supabase.from('recipes').delete().eq('id', id)
     revalidatePath('/recipes')
 }
+
+export async function updateRecipe(prevState: any, formData: FormData) {
+  const supabase = await createClient()
+
+  const id = formData.get('id') as string
+  const name = formData.get('name') as string
+  const ingredientsStr = formData.get('ingredients') as string
+  const ingredients = JSON.parse(ingredientsStr)
+
+  const { error } = await supabase
+    .from('recipes')
+    .update({
+        name,
+        ingredients
+    })
+    .eq('id', id)
+
+  if (error) {
+    console.error('Update Recipe Error:', error)
+    return { message: 'Failed to update recipe' }
+  }
+
+  revalidatePath('/recipes')
+  return { message: 'success' }
+}

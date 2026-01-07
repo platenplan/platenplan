@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import AddInventoryDialog from "@/components/forms/AddInventoryDialog"
 import DeleteButton from "@/components/DeleteButton"
+import EditInventoryDialog from "@/components/forms/EditInventoryDialog"
 
 export default async function InventoryPage() {
   const supabase = await createClient()
@@ -22,7 +23,8 @@ export default async function InventoryPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {items?.map((i) => (
           <Card key={i.id} className="relative group">
-             <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+             <div className="absolute top-2 right-2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity bg-background/80 rounded-md backdrop-blur-sm border shadow-sm">
+                 <EditInventoryDialog item={i} />
                  <DeleteButton table="inventory" id={i.id} path="/inventory" />
              </div>
              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

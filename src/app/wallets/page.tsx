@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card"
 import { Wallet as WalletIcon } from "lucide-react"
 import AddWalletDialog from "@/components/forms/AddWalletDialog"
 import DeleteButton from "@/components/DeleteButton"
+import EditWalletDialog from "@/components/forms/EditWalletDialog"
 
 export default async function WalletsPage() {
   const supabase = await createClient()
@@ -18,7 +19,8 @@ export default async function WalletsPage() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {wallets?.map((w) => (
           <Card key={w.id} className="relative group">
-            <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+            <div className="absolute top-2 right-2 flex items-center opacity-0 group-hover:opacity-100 transition-opacity bg-background/80 rounded-md backdrop-blur-sm border shadow-sm">
+                 <EditWalletDialog wallet={w} />
                  <DeleteButton table="wallets" id={w.id} path="/wallets" />
             </div>
             <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

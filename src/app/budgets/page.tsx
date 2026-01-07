@@ -3,6 +3,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import AddBudgetDialog from "@/components/forms/AddBudgetDialog";
 import DeleteButton from "@/components/DeleteButton";
+import EditBudgetDialog from "@/components/forms/EditBudgetDialog";
 
 export default async function BudgetPlanner() {
   const supabase = await createClient()
