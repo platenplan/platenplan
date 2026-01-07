@@ -21,7 +21,7 @@ export default async function AddTransactionPage() {
      // Self-healing: Create a household if it doesn't exist
      const { data: newHousehold, error: createError } = await supabase
         .from('households')
-        .insert({ name: 'My Household' })
+        .insert({ name: 'My Household', created_by: user.id })
         .select()
         .single();
      
