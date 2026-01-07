@@ -15,7 +15,9 @@ export default async function AddTransactionPage() {
     .eq('id', user.id)
     .single()
   
-  if (!profile?.household_id) {
+  let householdId = profile?.household_id;
+
+  if (!householdId) {
      // Self-healing: Create a household if it doesn't exist
      const { data: newHousehold, error: createError } = await supabase
         .from('households')
@@ -25,31 +27,33 @@ export default async function AddTransactionPage() {
      
      if (newHousehold && !createError) {
          await supabase.from('profiles').update({ household_id: newHousehold.id }).eq('id', user.id);
-         // Refresh profile
-         profile.household_id = newHousehold.id;
+         householdId = newHousehold.id;
      } else {
-         return <div className="p-4 text-center text-red-500">
-            Error: Could not retrieve or create household. Please contact support.
-            <br/>{createError?.message}
-         </div>
+         return (
+            <div className="p-4 text-center text-red-500">
+                Error: Could not retrieve or create household. Please contact support.
+                <br/>
+                <span className="text-sm text-gray-400">{createError?.message}</span>
+            </div>
+         )
      }
   }
 
   const { data: categories } = await supabase
     .from('categories')
     .select('id, name')
-    .eq('household_id', profile.household_id)
+    .eq('household_id', householdId)
     .order('name')
   
   const { data: wallets } = await supabase
     .from('wallets')
     .select('id, name, balance')
-    .eq('household_id', profile.household_id)
+    .eq('household_id', householdId)
 
   const { data: profiles } = await supabase
     .from('profiles')
     .select('id, full_name')
-    .eq('household_id', profile.household_id)
+    .eq('household_id', householdId)
 
   return (
     <div className="flex flex-col items-center justify-center p-4 max-w-lg mx-auto w-full">
