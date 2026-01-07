@@ -16,7 +16,23 @@ export default async function AddTransactionPage() {
     .single()
   
   if (!profile?.household_id) {
-     return <div>No household found. Please contact support.</div>
+     // Self-healing: Create a household if it doesn't exist
+     const { data: newHousehold, error: createError } = await supabase
+        .from('households')
+        .insert({ name: 'My Household' })
+        .select()
+        .single();
+     
+     if (newHousehold && !createError) {
+         await supabase.from('profiles').update({ household_id: newHousehold.id }).eq('id', user.id);
+         // Refresh profile
+         profile.household_id = newHousehold.id;
+     } else {
+         return <div className="p-4 text-center text-red-500">
+            Error: Could not retrieve or create household. Please contact support.
+            <br/>{createError?.message}
+         </div>
+     }
   }
 
   const { data: categories } = await supabase
