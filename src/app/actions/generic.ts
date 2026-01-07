@@ -3,6 +3,30 @@
 import { createClient } from '@/lib/supabase/server';
 import { revalidatePath } from 'next/cache';
 
+// Helper to ensure context
+async function getContext(supabase: any, user: any) {
+    let { data: profile } = await supabase.from('profiles').select('id, household_id').eq('id', user.id).single();
+    
+    if (!profile) {
+        // Create household first
+        const { data: hh } = await supabase.from('households').insert({ name: 'My Household', created_by: user.id }).select().single();
+        if (hh) {
+            // Create profile
+            const { data: newProfile } = await supabase.from('profiles').insert({ id: user.id, household_id: hh.id, role: 'member' }).select().single();
+            profile = newProfile;
+        }
+    } else if (!profile.household_id) {
+        // Create household if missing
+        const { data: hh } = await supabase.from('households').insert({ name: 'My Household', created_by: user.id }).select().single();
+        if (hh) {
+            await supabase.from('profiles').update({ household_id: hh.id }).eq('id', user.id);
+            profile.household_id = hh.id;
+        }
+    }
+
+    return profile;
+}
+
 // Generic Delete
 export async function deleteItem(table: string, id: string, path: string) {
   const supabase = await createClient();
@@ -21,9 +45,8 @@ export async function createInventoryItem(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: true, message: "Unauthorized" };
 
-  // Get Household
-  const { data: profile } = await supabase.from('profiles').select('household_id').eq('id', user.id).single();
-  if (!profile) return { error: true, message: "No profile found" };
+  const profile = await getContext(supabase, user);
+  if (!profile?.household_id) return { error: true, message: "Could not establish household context." };
 
   const name = formData.get('name') as string;
   const quantity = Number(formData.get('quantity'));
@@ -50,8 +73,8 @@ export async function createWallet(formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return { error: true, message: "Unauthorized" };
 
-  const { data: profile } = await supabase.from('profiles').select('household_id').eq('id', user.id).single();
-  if (!profile) return { error: true, message: "No profile found" };
+  const profile = await getContext(supabase, user);
+  if (!profile?.household_id) return { error: true, message: "Could not establish household context." };
 
   const name = formData.get('name') as string;
   const type = formData.get('type') as string; // 'personal' or 'shared'
@@ -76,8 +99,8 @@ export async function createRecurringExpense(formData: FormData) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return { error: true, message: "Unauthorized" };
   
-    const { data: profile } = await supabase.from('profiles').select('household_id').eq('id', user.id).single();
-    if (!profile) return { error: true, message: "No profile found" };
+    const profile = await getContext(supabase, user);
+    if (!profile?.household_id) return { error: true, message: "Could not establish household context." };
   
     const name = formData.get('name') as string;
     const amount = Number(formData.get('amount'));
